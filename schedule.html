@@ -1,0 +1,99 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>CozytouchPanel — Weekly schedules</title>
+<style>
+:root{color-scheme:dark;--bg:#0d1420;--panel:#172335;--edge:#354763;--text:#edf4ff;--muted:#a8bad1;--blue:#7bbaff}
+*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--text);font-family:system-ui,Segoe UI,sans-serif}main{max-width:1050px;margin:auto;padding:28px 18px}header{display:flex;gap:12px;justify-content:space-between;align-items:center;flex-wrap:wrap}a{color:var(--blue)}h1{font-size:27px;margin:0 0 6px}h2{font-size:18px}p,.muted,small{color:var(--muted)}.card{background:var(--panel);border:1px solid var(--edge);border-radius:14px;padding:18px;margin:16px 0}.head{display:flex;gap:14px;align-items:center;flex-wrap:wrap}button,select,input{font:inherit;border:1px solid #657c99;border-radius:8px;background:#23354e;color:var(--text);padding:9px}button{cursor:pointer}button:disabled{opacity:.45;cursor:default}.primary{background:#286fa9}.days{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}@media(max-width:750px){.days{grid-template-columns:1fr}}.day{border:1px solid var(--edge);border-radius:12px;padding:12px}.day h2{margin:0 0 12px}.slot{display:flex;align-items:center;gap:7px;margin:8px 0;flex-wrap:wrap}.slot input{width:91px}.slot .num{min-width:16px;color:var(--muted);font-size:13px}.notice{white-space:pre-wrap;padding:14px;border:1px solid #947c4d;border-radius:10px;color:#ffe1a2;margin:16px 0}.hidden{display:none}.diff{border-bottom:1px solid var(--edge);padding:8px 0}.diff code{color:#e1f1ff}#review{scroll-margin-top:20px}#confirmation{width:210px}#copy{margin-left:auto}
+</style></head><body><main>
+<header><div><h1>Weekly schedule editor</h1><p>Seven-day internal Comfort programming · up to 3 periods per day · one room per save</p></div><a href="/">← Room dashboard</a></header>
+<div class="card"><div class="head"><label for="room">Room</label><select id="room"><option>Living room</option><option>Bedroom</option><option>Hall</option><option>Kitchen</option></select><button id="load">Load from Cozytouch</button><button id="copy" disabled>Copy Monday to all days</button></div>
+<p>Use HH:MM, including <strong>24:00</strong> for midnight. Empty slots are 00:00–00:00. Comfort applies within each period; Eco applies outside.</p></div>
+<div id="message" role="status"></div><section class="days" id="days"></section>
+<div class="card"><button id="reviewButton" class="primary" disabled>Review changes</button>
+<small>Changes are not sent until you review the exact differences and confirm.</small></div>
+<section id="review" class="card hidden"><h2>Review this room's weekly schedule</h2><div id="changes"></div>
+<p>This writes a complete seven-day schedule to only the selected radiator. A private backup is made before the write. Other radiator controls are unaffected.</p>
+<label>Type <strong id="expectedConfirm"></strong> to confirm</label>
+<div class="head" style="margin-top:10px"><input id="confirmation" autocomplete="off" spellcheck="false"><button id="apply" class="primary">Apply schedule</button><button id="cancel">Cancel</button></div></section>
+<p class="muted">Cloud execution completion and actual heating behavior are separate checks. A matching readback confirms the reported schedule, not a physical heating-cycle test. Keep the original radiator schedules available as fallback.</p>
+</main><script>
+const DAYS=['monday','tuesday','wednesday','thursday','friday','saturday','sunday'];
+const el=id=>document.getElementById(id);
+const h=s=>String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+let csrf=null,loaded=null,previewToken=null,busy=false;
+function notice(s){el('message').innerHTML=s?'<div class="notice">'+h(s)+'</div>':'';}
+function resetPreview(){previewToken=null;el('review').classList.add('hidden');el('confirmation').value='';}
+function setBusy(v){busy=v;el('load').disabled=v;el('reviewButton').disabled=v||!loaded;el('copy').disabled=v||!loaded;el('apply').disabled=v;}
+function render(week){
+  el('days').innerHTML=DAYS.map(day=>'<div class="day"><h2>'+day[0].toUpperCase()+day.slice(1)+'</h2>'+
+    week[day].map((slot,i)=>'<div class="slot"><span class="num">'+(i+1)+'</span><input aria-label="'+day+' period '+(i+1)+' start" data-day="'+day+'" data-slot="'+i+'" data-key="start" value="'+h(slot.start)+'" placeholder="HH:MM"> — <input aria-label="'+day+' period '+(i+1)+' end" data-day="'+day+'" data-slot="'+i+'" data-key="end" value="'+h(slot.end)+'" placeholder="HH:MM"></div>').join('')+'</div>').join('');
+  el('days').querySelectorAll('input').forEach(x=>x.addEventListener('input',resetPreview));
+}
+function collect(){
+  if(!loaded)throw Error('Load a room first');
+  const out={};
+  DAYS.forEach(day=>out[day]=[{start:'00:00',end:'00:00'},{start:'00:00',end:'00:00'},{start:'00:00',end:'00:00'}]);
+  for(const input of el('days').querySelectorAll('input')){
+    out[input.dataset.day][Number(input.dataset.slot)][input.dataset.key]=input.value.trim();
+  }
+  return out;
+}
+async function api(path,opts={}){
+  const res=await fetch(path,{cache:'no-store',...opts});
+  const result=await res.json();
+  if(!res.ok)throw Error(result.error||'Request failed');
+  return result;
+}
+async function load(){
+  if(busy)return;
+  setBusy(true);resetPreview();notice('Loading the current schedule from Cozytouch…');
+  try{
+    const data=await api('/api/schedule?room='+encodeURIComponent(el('room').value));
+    loaded={room:data.room,days:data.days};csrf=data.csrf;render(data.days);notice('Loaded '+data.room+'. Changes remain local until confirmed.');
+  }catch(err){loaded=null;el('days').innerHTML='';notice(err.message);}
+  finally{setBusy(false);}
+}
+async function review(){
+  if(busy||!loaded)return;
+  setBusy(true);resetPreview();
+  try{
+    const value=collect();
+    const data=await api('/api/schedule/preview',{method:'POST',headers:{'Content-Type':'application/json','X-Cozy-CSRF':csrf},body:JSON.stringify({room:loaded.room,days:value})});
+    if(data.no_change){notice('No schedule changes detected. Nothing to send.');return;}
+    previewToken=data.preview_token;
+    const changes=data.changes;
+    const format=slots=>slots.filter(x=>x.start!==x.end).map(x=>x.start+'–'+x.end).join(', ')||'No Comfort periods';
+    el('changes').innerHTML=DAYS.filter(day=>changes[day]).map(day=>'<div class="diff"><strong>'+h(day)+'</strong><div>Current: <code>'+h(format(changes[day].before))+'</code></div><div>Proposed: <code>'+h(format(changes[day].after))+'</code></div></div>').join('');
+    el('expectedConfirm').textContent='APPLY '+loaded.room;
+    el('review').classList.remove('hidden');
+    el('review').scrollIntoView({behavior:'smooth'});
+    notice('Review generated. Expires in five minutes; editing the schedule cancels it.');
+  }catch(err){notice(err.message);}
+  finally{setBusy(false);}
+}
+async function apply(){
+  if(!previewToken||!loaded||busy)return;
+  if(el('confirmation').value!=='APPLY '+loaded.room){notice('Confirmation phrase did not match. Nothing sent.');return;}
+  setBusy(true);
+  notice('Sending one schedule command, checking execution result and reading the schedule back…');
+  const token=previewToken;resetPreview();
+  try{
+    const result=await api('/api/schedule/apply',{method:'POST',headers:{'Content-Type':'application/json','X-Cozy-CSRF':csrf},body:JSON.stringify({room:loaded.room,preview_token:token,confirmation:'APPLY '+loaded.room})});
+    notice('Execution: '+result.execution_state+' (failure: '+result.failure_type+').\nFull weekly readback: '+(result.readback_match?'MATCH':'NOT VERIFIED')+'.\nLocal backup: .private/schedule_backups/'+result.backup_name+'\n'+(result.readback_match?'Check the resulting schedule in the official app or on the radiator.':'Do not retry blindly; inspect Cozytouch first.'));
+    // Always reload fresh, regardless of execution outcome.
+    loaded=null;el('days').innerHTML='';el('reviewButton').disabled=true;el('copy').disabled=true;
+  }catch(err){notice(err.message+'\nIf execution might have started, check Cozytouch before another attempt.');}
+  finally{setBusy(false);}
+}
+el('load').onclick=load;
+el('reviewButton').onclick=review;
+el('apply').onclick=apply;
+el('cancel').onclick=resetPreview;
+el('room').onchange=()=>{loaded=null;el('days').innerHTML='';setBusy(false);resetPreview();notice('Room changed. Load the new schedule before editing.');};
+el('copy').onclick=()=>{
+  if(!loaded||busy)return;
+  const inputs=collect();for(const day of DAYS){if(day==='monday')continue;for(let i=0;i<3;i++)for(const key of ['start','end'])el('days').querySelector('[data-day="'+day+'"][data-slot="'+i+'"][data-key="'+key+'"]').value=inputs.monday[i][key];}
+  resetPreview();notice('Copied Monday to all days locally. Review the differences before sending.');
+};
+load();
+</script></body></html>
