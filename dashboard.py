@@ -39,7 +39,7 @@ TOKEN = secrets.token_urlsafe(32)
 WRITE_LOCK = threading.Lock()
 SESSION = {}
 EVENTS = []
-READING_FIELDS = {"comfort": ("core:ComfortRoomTemperatureState", "setComfortTemperature"), "reduction": ("io:SetpointLoweringTemperatureInProgModeState", "setSetpointLoweringTemperatureInProgMode")}
+READING_FIELDS = {}  # Writes paused pending confirmed per-device execution and schedule semantics.
 VENDORS = {"1": ("Atlantic", Server.ATLANTIC_COZYTOUCH),
            "2": ("Thermor", Server.THERMOR_COZYTOUCH),
            "3": ("Sauter", Server.SAUTER_COZYTOUCH)}
@@ -126,6 +126,9 @@ def build_rooms(devices, mapping):
             "temperature": temp.get("core:TemperatureState"),
             "comfort": s.get("core:ComfortRoomTemperatureState"),
             "eco_state": s.get("core:EcoRoomTemperatureState"),
+            "derogated_target": s.get("core:DerogatedTargetTemperatureState"),
+            "target_temperature": s.get("core:TargetTemperatureState"),
+            "schedule_type": s.get("io:InternalExternalSchedulingTypeState"),
             "eco_reduction": s.get("io:SetpointLoweringTemperatureInProgModeState"),
             "effective_target": s.get("io:EffectiveTemperatureSetpointState"),
             "mode": s.get("io:TargetHeatingLevelState"),
@@ -232,6 +235,12 @@ async def perform_change(server, username, password, room_id, field, value, expe
 
 
 def command_write(data):
+    # Safe-by-default: previous tests showed OVERRIDEMODE_ERROR and diverging
+    # Eco fields. Do not issue another command until verified semantics exist.
+    raise ValueError("Heating writes temporarily disabled. Await confirmed command and weekly-program handling.")
+
+
+def disabled_command_write(data):
     if not WRITE_LOCK.acquire(blocking=False):
         raise ValueError("Another refresh or change is in progress. Try again shortly")
     try:
