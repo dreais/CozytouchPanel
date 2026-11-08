@@ -17,6 +17,7 @@ from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlsplit, parse_qs
 import scheduler_service
+import temperature_service
 import webbrowser
 
 from config import get_credentials
@@ -237,35 +238,32 @@ async def perform_change(server, username, password, room_id, field, value, expe
 
 
 def command_write(data):
-    # Safe-by-default: previous tests showed OVERRIDEMODE_ERROR and diverging
-    # Eco fields. Do not issue another command until verified semantics exist.
-    raise ValueError("Heating writes temporarily disabled. Await confirmed command and weekly-program handling.")
-
-
-def disabled_command_write(data):
+    # This entrypoint is serialized with the schedule editor and status polling.
     if not WRITE_LOCK.acquire(blocking=False):
-        raise ValueError("Another refresh or change is in progress. Try again shortly")
+        raise ValueError("Another Cozytouch operation is in progress")
     try:
         with LOCK:
-            ok = STATUS["ok"]
-            last = STATUS["last_updated"]
-        if not ok or not last or (datetime.now(timezone.utc)-datetime.fromisoformat(last)).total_seconds()>180:
-            raise ValueError("Cloud data is stale. Writes are disabled")
+            ok, last = STATUS["ok"], STATUS["last_updated"]
+        if not ok or not last or (datetime.now(timezone.utc) - datetime.fromisoformat(last)).total_seconds() > 180:
+            raise ValueError("Cloud readings are stale; wait for refresh")
         room_id, field = data.get("id"), data.get("field")
-        room, value = make_plan(room_id, field, data.get("value"))
+        room = room_for_id(room_id)
+        if field not in ("comfort", "reduction"):
+            raise ValueError("Unsupported temperature field")
         if data.get("room") != room or data.get("confirmation") != f"APPLY {room}":
-            raise ValueError("Explicit confirmation did not match the selected room")
-        expected = data.get("expected")
-        if isinstance(expected, bool) or not isinstance(expected, (int,float)):
-            raise ValueError("Expected value missing")
-        result = asyncio.run(perform_change(SESSION["server"],SESSION["username"],SESSION["password"],room_id,field,value,float(expected)))
-        EVENTS.append({"time":datetime.now(timezone.utc).isoformat(),"room":room,"field":field,**result})
+            raise ValueError("Room confirmation did not match")
+        value, expected = data.get("value"), data.get("expected")
+        if any(isinstance(x, bool) or not isinstance(x, (int, float)) or not math.isfinite(x) for x in (value, expected)):
+            raise ValueError("Invalid requested/expected temperature")
+        result = asyncio.run(temperature_service.change(
+            __import__("sys").modules["__main__"], room_id, field, float(value), float(expected)))
+        EVENTS.append({"time": datetime.now(timezone.utc).isoformat(), "room": room,
+                       "field": field, "state": result["state"]})
         del EVENTS[:-20]
-        # Invalidate data: next background refresh obtains readings independently.
         with LOCK:
             STATUS["ok"] = False
-            STATUS["error"] = "A setting was sent. Waiting for the next complete dashboard refresh."
-        return {"room":room,"field":field,**result}
+            STATUS["error"] = "Temperature command finished; waiting for fresh cloud data."
+        return result
     finally:
         WRITE_LOCK.release()
 
