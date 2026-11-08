@@ -15,7 +15,8 @@ import threading
 import time
 from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from urllib.parse import urlsplit
+from urllib.parse import urlsplit, parse_qs
+import scheduler_service
 import webbrowser
 
 from config import get_credentials
@@ -34,6 +35,7 @@ POLL_SECONDS = 60
 HOST, PORT = "127.0.0.1", 8765
 CONFIG_PATH = Path(__file__).with_name("rooms.json")
 HTML_PATH = Path(__file__).with_name("index.html")
+SCHEDULE_HTML_PATH = Path(__file__).with_name("schedule.html")
 PROPOSALS = {"Living room": (21.0, 1.5), "Bedroom": (19.5, 1.0), "Hall": (19.0, 1.0), "Kitchen": (19.5, 1.0)}
 TOKEN = secrets.token_urlsafe(32)
 WRITE_LOCK = threading.Lock()
@@ -271,6 +273,26 @@ def disabled_command_write(data):
 class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
         path = urlsplit(self.path).path
+        if path == "/schedule":
+            return self.reply(200, "text/html; charset=utf-8", SCHEDULE_HTML_PATH.read_bytes())
+        if path == "/api/schedule":
+            try:
+                query = parse_qs(urlsplit(self.path).query)
+                room_values = query.get("room", [])
+                if len(room_values) != 1:
+                    raise ValueError("Select exactly one room")
+                if not WRITE_LOCK.acquire(blocking=False):
+                    raise ValueError("Another operation is in progress")
+                try:
+                    data = asyncio.run(scheduler_service.load_week(__import__("sys").modules["__main__"], room_values[0]))
+                    data["csrf"] = TOKEN
+                finally:
+                    WRITE_LOCK.release()
+                return self.reply(200, "application/json", json.dumps(data).encode())
+            except ValueError as exc:
+                return self.reply(400, "application/json", json.dumps({"error": str(exc)}).encode())
+            except Exception as exc:
+                return self.reply(502, "application/json", json.dumps({"error": f"Schedule read failed ({type(exc).__name__}); inspect server connection."}).encode())
         if path == "/api/status":
             with LOCK:
                 data = dict(STATUS)
@@ -285,6 +307,45 @@ class Handler(BaseHTTPRequestHandler):
             self.reply(404, "text/plain", b"Not found")
 
     def do_POST(self):
+        if urlsplit(self.path).path in ("/api/schedule/preview", "/api/schedule/apply"):
+            if (self.headers.get("Origin") != f"http://{HOST}:{PORT}"
+                or self.headers.get("X-Cozy-CSRF") != TOKEN
+                or self.headers.get("Content-Type", "").split(";")[0].strip() != "application/json"):
+                return self.reply(403, "application/json", b'{"error":"Request not authorized"}')
+            try:
+                size = int(self.headers.get("Content-Length", "0"))
+                if not 0 < size <= 16384:
+                    raise ValueError("Invalid request length")
+                data = json.loads(self.rfile.read(size))
+                if not isinstance(data, dict):
+                    raise ValueError("Malformed JSON request")
+                room = data.get("room")
+                if not isinstance(room, str) or room not in ROOM_NAMES:
+                    raise ValueError("Unknown room")
+                if not WRITE_LOCK.acquire(blocking=False):
+                    raise ValueError("Another operation is in progress")
+                try:
+                    app = __import__("sys").modules["__main__"]
+                    if urlsplit(self.path).path == "/api/schedule/preview":
+                        result = asyncio.run(scheduler_service.preview_week(app, room, data.get("days")))
+                    else:
+                        if data.get("confirmation") != f"APPLY {room}":
+                            raise ValueError("Confirmation does not match")
+                        preview_token = data.get("preview_token")
+                        if not isinstance(preview_token, str) or len(preview_token) > 128:
+                            raise ValueError("Missing preview")
+                        result = asyncio.run(scheduler_service.apply_week(app, room, preview_token))
+                        # Force the dashboard to refresh, rather than presenting stale values.
+                        with LOCK:
+                            STATUS["ok"] = False
+                            STATUS["error"] = "Schedule write submitted; waiting for a fresh device poll."
+                finally:
+                    WRITE_LOCK.release()
+                return self.reply(200, "application/json", json.dumps(result).encode())
+            except (ValueError, TypeError, KeyError, json.JSONDecodeError) as exc:
+                return self.reply(400, "application/json", json.dumps({"error": str(exc)}).encode())
+            except Exception as exc:
+                return self.reply(502, "application/json", json.dumps({"error": f"Schedule operation error ({type(exc).__name__}); outcome may be unknown. Inspect Cozytouch before retrying."}).encode())
         if urlsplit(self.path).path != "/api/apply":
             return self.reply(404, "text/plain", b"Not found")
         if self.headers.get("Origin") != f"http://{HOST}:{PORT}" or self.headers.get("X-Cozy-CSRF") != TOKEN or self.headers.get("Content-Type", "").split(";")[0].strip() != "application/json":
