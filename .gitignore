@@ -1,17 +1,21 @@
-# Cozytouch secrets
+# Private Cozytouch account settings (never commit)
 .env
 .env.*
 !.env.example
 
-# Device mappings and generated state
+# Device-to-room mappings and local runtime data
 rooms.json
 rooms.json.tmp
 *.log
+
+# Python generated files
 __pycache__/
 *.py[cod]
 .venv/
 venv/
 .pytest_cache/
+
+# Editor / OS
 .vscode/
 .idea/
 .DS_Store
