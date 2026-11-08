@@ -28,7 +28,7 @@ STATE_NAMES = (
     "core:OperatingModeState",
 )
 BLOCKED_KEYS = ("url", "id", "token", "password", "secret", "email", "owner", "address", "key", "serial", "mac", "uuid")
-SAFE_STRING = re.compile(r"^(?:[0-2]?\\d:[0-5]\\d(?::[0-5]\\d)?|[a-zA-Z _./:+-]{1,40})$")
+SAFE_STRING = re.compile(r"^(?:[0-2]?\d:[0-5]\d(?::[0-5]\d)?|[a-zA-Z _./:+-]{1,40})$")
 
 
 def jsonable(value):
@@ -91,15 +91,15 @@ async def main():
             states = {str(s.name): jsonable(s.value) for s in await client.get_state(heater.device_url)}
             selection = {k: states.get(k, "[not present]") for k in STATE_NAMES}
             report["rooms"][room] = selection
-            print(f"\\n--- {room} ---")
+            print(f"\n--- {room} ---")
             for key, value in selection.items():
                 print(f"{key}:")
                 preview = json.dumps(safe_preview(value), ensure_ascii=False, indent=2)
-                print(preview[:12000] + ("\\n[preview truncated]" if len(preview) > 12000 else ""))
+                print(preview[:12000] + ("\n[preview truncated]" if len(preview) > 12000 else ""))
         OUT_DIR.mkdir(exist_ok=True)
         destination = OUT_DIR / "schedules_latest.json"
         destination.write_text(json.dumps(report, indent=2, ensure_ascii=False), encoding="utf-8")
-        print("\\nSaved raw READ-ONLY schedule snapshot locally to .private/schedules_latest.json")
+        print("\nSaved raw READ-ONLY schedule snapshot locally to .private/schedules_latest.json")
         print("This directory is Git-ignored. Do NOT share the raw file or commit it.")
         print("If core:TimeProgramState is absent, do not infer an empty schedule.")
         print("No device refresh, schedule write, or heating command was sent.")
