@@ -80,16 +80,17 @@ async def main(args):
             await asyncio.sleep(delay)
             latest = state_dict(await client.get_state(heater.device_url))
             observed = latest.get(ECO_STATE)
-            observed_offset = latest.get(OFFSET_STATE)
-            print(f"Readback after additional {delay}s: Eco offset={observed}, programmed reduction={observed_offset}")
-            if (isinstance(observed, (int, float)) and
-                isinstance(observed_offset, (int, float)) and
-                abs(observed - args.offset) < 0.01 and
-                abs(observed_offset - args.offset) < 0.01):
-                print("VERIFIED: both Eco state fields match requested offset.")
-                print(f"To restore previous value, run with --room \"{args.room}\" --offset {current} --apply.")
+            programmed_reduction = latest.get(OFFSET_STATE)
+            effective = latest.get("io:EffectiveTemperatureSetpointState")
+            mode = latest.get("io:TargetHeatingLevelState")
+            override = latest.get("core:DerogatedTargetTemperatureState")
+            print(f"Readback after additional {delay}s: Eco offset={observed}, programmed reduction={programmed_reduction}, effective target={effective}, mode={mode}, override={override}")
+            if isinstance(observed, (int, float)) and abs(observed - args.offset) < 0.01:
+                print("VERIFIED: core Eco offset matches requested value; other fields may remain unchanged.")
+                print("Physical heating behavior remains unverified. Check the effective target and radiator.")
+                print(f'To restore the previous value: --room "{args.room}" --offset {current} --apply')
                 return
-        print("NOT VERIFIED. Do not repeat blindly; inspect physical radiator and Cozytouch first.")
+        print("NOT VERIFIED: core Eco offset did not match requested value. Do not retry blindly.")
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="One-command Eco test; dry-run by default.")
