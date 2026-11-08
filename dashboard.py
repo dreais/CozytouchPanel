@@ -269,9 +269,37 @@ def command_write(data):
         EVENTS.append({"time": datetime.now(timezone.utc).isoformat(), "room": room,
                        "field": field, "state": result["state"]})
         del EVENTS[:-20]
-        with LOCK:
-            STATUS["ok"] = False
-            STATUS["error"] = "Temperature command finished; waiting for fresh cloud data."
+        # Refresh independently AFTER the write verification, rather than
+        # showing the last 60-second polling snapshot beside "verified".
+        try:
+            refreshed = asyncio.run(fetch(
+                SESSION["server"], SESSION["username"], SESSION["password"], load_mapping()))
+            current = next((x for x in refreshed if x["name"] == room), None)
+            if current is None:
+                raise ValueError("Room absent from refresh")
+            state_field = "comfort" if field == "comfort" else "eco_reduction"
+            fresh_value = current.get(state_field)
+            result["dashboard_fresh_value"] = fresh_value
+            result["dashboard_effective_target"] = current.get("effective_target")
+            result["dashboard_eco_offset"] = current.get("eco_state")
+            result["dashboard_consistent"] = (
+                isinstance(fresh_value, (float, int))
+                and abs(fresh_value - float(value)) < 0.01)
+            if result["state"] == "verified" and not result["dashboard_consistent"]:
+                result["state"] = "discrepant"
+            with LOCK:
+                STATUS.update({"ok": True,
+                               "last_updated": datetime.now(timezone.utc).isoformat(),
+                               "error": None,
+                               "rooms": refreshed, "mapping_issue": None})
+        except Exception:
+            with LOCK:
+                STATUS["ok"] = False
+                STATUS["error"] = "Write processed; fresh dashboard refresh failed. Verify in Cozytouch."
+            result["dashboard_consistent"] = None
+            result["dashboard_refresh_failed"] = True
+            if result["state"] == "verified":
+                result["state"] = "unverified"
         return result
     finally:
         WRITE_LOCK.release()
