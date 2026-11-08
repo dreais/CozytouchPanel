@@ -11,6 +11,9 @@ KEYS = (
     'io:SetpointLoweringTemperatureInProgModeState',
     'io:EffectiveTemperatureSetpointState',
     'core:DerogatedTargetTemperatureState',
+    'core:TargetTemperatureState',
+    'core:PreviousTargetTemperatureState',
+    'io:TimerForTransitoryStateState',
     'io:TargetHeatingLevelState',
     'core:OperatingModeState',
     'io:InternalExternalSchedulingTypeState',
@@ -46,6 +49,18 @@ async def main():
                     print('   expected parameter count:', getattr(definition, 'nparams', 'unknown'))
             program_states = [k for k in states if 'program' in k.lower() or 'schedul' in k.lower()]
             print('Schedule/program state names:', program_states or '(none available in GET states)')
+            comfort = states.get('core:ComfortRoomTemperatureState')
+            offset = states.get('io:SetpointLoweringTemperatureInProgModeState')
+            effective = states.get('io:EffectiveTemperatureSetpointState')
+            override = states.get('core:DerogatedTargetTemperatureState')
+            if isinstance(comfort, (int, float)) and isinstance(offset, (int, float)):
+                nominal = comfort - offset
+                print('Nominal ECO target (comfort minus offset):', round(nominal, 2))
+                if isinstance(effective, (int, float)) and abs(effective - nominal) > 0.11:
+                    print('NOTE: Effective target differs from nominal ECO target. Investigate active override.')
+            if isinstance(override, (int, float)) and override > 0:
+                print('NOTE: Nonzero derogated target is reported; its exact expiry is unknown.')
+
         print('\nRecent execution outcome metadata (cloud history):')
         try:
             history = await client.get_execution_history()
