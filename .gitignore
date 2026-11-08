@@ -20,3 +20,6 @@ venv/
 .idea/
 .DS_Store
 Thumbs.db
+
+# Raw schedule backups may contain private device information
+.private/
