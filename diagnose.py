@@ -57,7 +57,7 @@ async def main():
                 nominal = comfort - offset
                 print('Nominal ECO target (comfort minus offset):', round(nominal, 2))
                 if isinstance(effective, (int, float)) and abs(effective - nominal) > 0.11:
-                    print('NOTE: Effective target differs from nominal ECO target. Investigate active override.')
+                    print('NOTE: Effective target differs from calculated PROG ECO target (override or other behavior).')
             if isinstance(override, (int, float)) and override > 0:
                 print('NOTE: Nonzero derogated target is reported; its exact expiry is unknown.')
 
@@ -65,10 +65,10 @@ async def main():
         try:
             history = await client.get_execution_history()
             print('History entries available:', len(history))
-            for entry in history[:8]:
+            for entry in history[:12]:
                 # Exclude execution IDs, raw descriptions, devices, parameters, and URLs.
                 bits = []
-                for attr in ('status', 'state', 'execution_state', 'execution_status', 'type'):
+                for attr in ('status', 'state', 'execution_state', 'execution_status', 'type', 'failure_type', 'failure_code', 'error_code', 'failureType', 'failureCode'):
                     value = getattr(entry, attr, None)
                     if value is not None and isinstance(value, (str, int, float)):
                         bits.append(f'{attr}={value[:40] if isinstance(value, str) else value}')
