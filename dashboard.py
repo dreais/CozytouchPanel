@@ -257,8 +257,8 @@ def command_write(data):
             raise ValueError("Cloud readings are stale; wait for refresh")
         room_id, field = data.get("id"), data.get("field")
         room = room_for_id(room_id)
-        if field not in ("comfort", "reduction"):
-            raise ValueError("Unsupported temperature field")
+        if field != "reduction":
+            raise ValueError("Comfort changes paused: setTargetTemperature did not update Comfort. No command sent.")
         if data.get("room") != room or data.get("confirmation") != f"APPLY {room}":
             raise ValueError("Room confirmation did not match")
         value, expected = data.get("value"), data.get("expected")
