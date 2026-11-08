@@ -23,7 +23,23 @@ Local Windows dashboard for four Sauter TAHUAL io-homecontrol radiators via the 
 
 The weekly editor has not yet been live-tested against your gateway. The earlier Hall Monday `setTimeProgram` experiment did report `COMPLETED`, `NO_FAILURE`, and a full schedule readback match. This new UI uses the same command format but adds validation, backup, CSRF checks, and explicit confirmation.
 
-**Temperature controls remain disabled** pending clarification of Eco offsets and `OVERRIDEMODE_ERROR`. This editor does not alter Comfort temperatures, Eco reductions, device modes, or heater protection settings.
+## Temperature controls (experimental)
+
+The room dashboard now offers two individually confirmed, single-room edits:
+
+- **Eco reduction** uses `setSetpointLoweringTemperatureInProgMode`, observed in completed historical executions. It verifies `io:SetpointLoweringTemperatureInProgModeState`.
+- **Comfort/base target** uses `setTargetTemperature` rather than the previously failed `setComfortTemperature`. This is an EXPERIMENTAL mapping, and requires both `core:TargetTemperatureState` and `core:ComfortRoomTemperatureState` to match before reporting verified.
+
+Every write requires a fresh reading and room confirmation, a local backup in `.private/temperature_backups/`, a schedule invariance check, cloud execution-history matching, and temperature readback. A cloud completion alone does not prove success. Existing overrides remain untouched; they can still take precedence. No correction for the unverified ~1.5°C perceived temperature discrepancy is applied.
+
+**Recommended first live test:** if you want a slightly warmer Hall at night, reduce its Eco reduction from 4.0 to 3.5°C (programmed Eco target becomes 16.5°C, assuming a 20°C Comfort setting and no override). This is a real heating change. Do not apply if you do not want the result. Verify it in Cozytouch before testing Comfort edits. Never retry an unverified/failed operation blindly.
+
+Offline tests:
+
+```powershell
+py -m unittest test_scheduler_validation test_temperature_validation -v
+```
+
 
 ## Check offline input validation
 
