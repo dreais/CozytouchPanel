@@ -160,12 +160,20 @@ async def fetch(server, username, password, mapping):
 def polling_loop(server, username, password):
     while True:
         try:
-            mapping = load_mapping()
-            with WRITE_LOCK:
+            # Scheduled reads have lower priority than user-initiated writes.
+            # Skip this poll if a write/preview is underway; never queue a poll
+            # behind it and steal the lock before the next user interaction.
+            if not WRITE_LOCK.acquire(blocking=False):
+                time.sleep(POLL_SECONDS)
+                continue
+            try:
+                mapping = load_mapping()
                 rooms = asyncio.run(fetch(server, username, password, mapping))
-            with LOCK:
-                STATUS.update({"ok": True, "last_updated": datetime.now(timezone.utc).isoformat(),
-                               "error": None, "rooms": rooms, "mapping_issue": None})
+                with LOCK:
+                    STATUS.update({"ok": True, "last_updated": datetime.now(timezone.utc).isoformat(),
+                                   "error": None, "rooms": rooms, "mapping_issue": None})
+            finally:
+                WRITE_LOCK.release()
         except Exception as exc:
             # Do not print cloud errors, which may contain identifying URLs/account data.
             with LOCK:
@@ -238,9 +246,10 @@ async def perform_change(server, username, password, room_id, field, value, expe
 
 
 def command_write(data):
-    # This entrypoint is serialized with the schedule editor and status polling.
-    if not WRITE_LOCK.acquire(blocking=False):
-        raise ValueError("Another Cozytouch operation is in progress")
+    # A periodic cloud poll may already hold the lock. Give it time to finish
+    # rather than rejecting an explicitly confirmed user operation immediately.
+    if not WRITE_LOCK.acquire(timeout=30):
+        raise ValueError("Cloud refresh still in progress after 30 seconds; nothing was sent")
     try:
         with LOCK:
             ok, last = STATUS["ok"], STATUS["last_updated"]
